@@ -97,17 +97,20 @@ fn main() -> Result<(), CommandError> {
         }
 
         if buffer.ends_with(delim) {
+            // ffmpeg's stream from an MJPEG seems to include duplicate SOI tokens at the start of some images
+            // Luckily, the SOI (like the EOI) will occur uniquely within an image's bytes
+            let mut slice: &[u8] = buffer.as_ref();
             if let Some(location) = buffer
                 .windows(soi.len())
                 .rposition(|window| window == soi) {
                     if location != 0 {
-                        buffer.drain(..location);
+                        slice = &buffer[location..];
                     }
                 } else {
                     return Err(CommandError::Message("Could not find valid SOI"))
                 }
             
-            let transformed = turbojpeg::transform(&transform, &buffer)?;
+            let transformed = turbojpeg::transform(&transform, &slice)?;
             stdout.write_all(&transformed.as_ref())?;
             stdout.flush()?;
 
