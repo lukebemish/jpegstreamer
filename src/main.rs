@@ -1,8 +1,8 @@
-use std::io::{self, BufRead, Error, Write};
-use std::num::ParseIntError;
-use std::str::FromStr;
-use argparse::{ArgumentParser, Store};
+use std::error::Error;
+use std::io::{self, BufRead, Write};
+use clap::Parser;
 
+#[derive(Debug, Clone)]
 struct Crop {
     w: usize,
     h: usize,
@@ -10,68 +10,38 @@ struct Crop {
     y: usize
 }
 
-#[derive(Debug)]
-pub enum CommandError {
-    Int(ParseIntError),
-    IO(Error),
-    TurboJpeg(turbojpeg::Error),
-    Message(&'static str)
+#[derive(Parser, Debug)]
+#[command(about = "Modify JPEG images while streaming", long_about = None)]
+#[command(version = if let Some(version) = option_env!("PACKAGE_VERSION") { version} else { env!("CARGO_PKG_VERSION") })]
+struct Args {
+    /// Crop the image to the supplied bounds
+    #[arg(short, long, value_name = "W:H:X:Y", value_parser=parse_crop_string)]
+    crop: Crop
 }
 
-impl From<ParseIntError> for CommandError {
-    fn from(e: ParseIntError) -> Self {
-        CommandError::Int(e)
-    }
-}
-
-impl From<Error> for CommandError {
-    fn from(e: Error) -> Self {
-        CommandError::IO(e)
-    }
-}
-
-impl From<turbojpeg::Error> for CommandError {
-    fn from(e: turbojpeg::Error) -> Self {
-        CommandError::TurboJpeg(e)
-    }
-}
-
-impl FromStr for Crop {
-    type Err = CommandError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut w: [usize; 4] = [0, 0, 0, 0];
-        let mut count = 0;
-        for (i, part) in s.split(':').enumerate() {
-            if i >= 4  {
-                return Err(CommandError::Message("Too many components for crop"));
-            }
-            w[i] = part.parse()?;
-            count += 1;
+fn parse_crop_string(s: &str) -> Result<Crop, Box<dyn Error + Send + Sync>> {
+    let mut w: [usize; 4] = [0, 0, 0, 0];
+    let mut count = 0;
+    for (i, part) in s.split(':').enumerate() {
+        if i >= 4  {
+            return Err("Too many components for crop: expected W:H:X:Y".into());
         }
-        if count < 4  {
-            return Err(CommandError::Message("Too few components for crop"));
-        }
-        return Ok(Crop {
-            w: w[0],
-            h: w[1],
-            x: w[2],
-            y: w[3]
-        });
+        w[i] = part.parse()?;
+        count += 1;
     }
+    if count < 4  {
+        return Err("Too few components for crop: expected W:H:X:Y".into());
+    }
+    return Ok(Crop {
+        w: w[0],
+        h: w[1],
+        x: w[2],
+        y: w[3]
+    });
 }
 
-fn main() -> Result<(), CommandError> {
-    let mut crop: Crop = Crop { w: 0, h: 0, x: 0, y: 0 };
-    {
-        let mut ap = ArgumentParser::new();
-        ap.set_description("Modify JPEG images while streaming.");
-        ap.refer(&mut crop)
-            .add_option(&["--crop"], Store,
-            "Crop the image, as w:h:x:y")
-            .required();
-        ap.parse_args_or_exit();
-    }
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
 
     let stdin = io::stdin();
     let mut reader = stdin.lock();
@@ -82,10 +52,10 @@ fn main() -> Result<(), CommandError> {
 
     let mut transform = turbojpeg::Transform::default();
     transform.crop = Some(turbojpeg::TransformCrop {
-        x: crop.x,
-        y: crop.y,
-        width: Some(crop.w),
-        height: Some(crop.h)
+        x: args.crop.x,
+        y: args.crop.y,
+        width: Some(args.crop.w),
+        height: Some(args.crop.h)
     });
 
     let mut stdout = io::stdout();
@@ -107,7 +77,7 @@ fn main() -> Result<(), CommandError> {
                         slice = &buffer[location..];
                     }
                 } else {
-                    return Err(CommandError::Message("Could not find valid SOI"))
+                    return Err("Could not find valid SOI".into())
                 }
             
             let transformed = turbojpeg::transform(&transform, &slice)?;
